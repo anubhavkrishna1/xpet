@@ -12,9 +12,12 @@
 #include <sys/select.h>
 
 #include <X11/Xlib.h>
+#include <X11/xpm.h>
+#include <X11/extensions/shape.h>
 
 #include "xpet.h"
 #include "config.h"
+#include "img.xpm"
 
 void create_window(void);
 void get_mouse_pos(void);
@@ -27,6 +30,10 @@ void xsleep(long ms);
 Display* dpy = NULL;
 Window root;
 
+XpmAttributes xpm_attrs;
+Pixmap pix;
+Pixmap mask;
+
 int scr;
 int scr_width;
 int scr_height;
@@ -36,6 +43,7 @@ struct mouse mouse;
 struct pet pet;
 
 Bool running = False;
+Bool chasing = False;
 
 void create_window(void)
 {
@@ -51,6 +59,10 @@ void create_window(void)
 		CopyFromParent, InputOutput, CopyFromParent, CWOverrideRedirect,
 		&attrs
 	);
+
+	XpmCreatePixmapFromData(dpy, root, (char**)img, &pix, &mask, &xpm_attrs);
+	XShapeCombineMask(dpy, pet.window, ShapeBounding, 0, 0, mask, ShapeSet);
+	XSetWindowBackgroundPixmap(dpy, pet.window, pix);
 
 	XMapWindow(dpy, pet.window);
 }
@@ -76,11 +88,9 @@ void goto_mouse(void)
 {
 	get_mouse_pos();
 
-	/*
 	if (abs(mouse.x - pet.x) < 2 && abs(mouse.y - pet.y) < 2) {
 	 	return; 
 	}
-	*/
 
 	int diff_x = (mouse.x - pet.x) / PET_SMOOTH;
 	int diff_y = (mouse.y - pet.y) / PET_SMOOTH;
@@ -120,13 +130,9 @@ void run(void)
 		while (XPending(dpy)) {
 			XEvent ev;
 			XNextEvent(dpy, &ev);
-
-			if (ev.type == KeyPress) {
-				running = False;
-			}
 		}
 		goto_mouse();
-		xsleep(16); /* 60 updates/s */
+		xsleep(PET_REFRESH);
 	}
 }
 
