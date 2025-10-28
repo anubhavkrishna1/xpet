@@ -5,7 +5,7 @@
  * screen!
  *
  * > uint 2025
-*/
+ */
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -16,16 +16,19 @@
 #include <X11/extensions/shape.h>
 
 #include "xpet.h"
-#include "config.h"
 #include "img.xpm"
+#include "config.h"
 
 void create_window(void);
 void get_mouse_pos(void);
 void goto_mouse(void);
 void grab_keys(void);
+void load_animations(void);
 void setup(void);
+void set_pet_state(enum state new_state);
 void quit(void);
 void run(void);
+void update_animation(void);
 void xsleep(long ms);
 
 Display* dpy = NULL;
@@ -42,6 +45,7 @@ int revert_to;
 
 struct mouse mouse;
 struct pet pet;
+struct animation animations[STATE_LAST];
 
 Bool running = False;
 
@@ -78,9 +82,11 @@ void get_mouse_pos(void)
 	int win_y_ret;
 	unsigned int mask_ret;
 
-	XQueryPointer(dpy, root,
-			&root_return, &child_return,
-			&ret_x, &ret_y, &win_x_ret, &win_y_ret, &mask_ret);
+	XQueryPointer(
+		dpy, root,
+		&root_return, &child_return,
+		&ret_x, &ret_y, &win_x_ret, &win_y_ret, &mask_ret
+	);
 	mouse.x = ret_x;
 	mouse.y = ret_y;
 }
@@ -90,7 +96,7 @@ void goto_mouse(void)
 	get_mouse_pos();
 
 	if (abs(mouse.x - pet.x) < 2 && abs(mouse.y - pet.y) < 2) {
-	 	return; 
+		return; 
 	}
 
 	int diff_x = (mouse.x - pet.x) / PET_SMOOTH;
@@ -120,6 +126,25 @@ void grab_keys(void)
 	}
 }
 
+void load_animations(void)
+{
+	for (int i = 0; i < STATE_LAST; i++) {
+		animations[i].n_frames = 1;
+		animations[i].loop = True;
+		animations[i].frames = malloc(sizeof(struct frame));
+
+		if (animations[i].frames) {
+			XpmCreatePixmapFromData(
+					dpy, root, (char **)img,
+					&animations[i].frames[0].pix,
+					&animations[i].frames[0].mask,
+					&xpm_attrs
+					);
+			animations[i].frames[0].duration = FRAME_DURATION;
+		}
+	}
+}
+
 void setup(void)
 {
 	dpy = XOpenDisplay(NULL);
@@ -133,14 +158,39 @@ void setup(void)
 	scr_height = XDisplayHeight(dpy, scr);
 	root = RootWindow(dpy, scr);
 
+	load_animations();
 	create_window();
 	grab_keys();
+
+	pet.current_frame = 0;
+	pet.frame_time = 0;
+	set_pet_state(IDLE);
 
 	XSelectInput(dpy, root, KeyPressMask | KeyReleaseMask);
 }
 
+void set_pet_state(enum state new_state)
+{
+	if (pet.state != new_state) {
+		pet.state = new_state;
+		pet.current_animation = &animations[new_state];
+		pet.current_frame = 0;
+		pet.frame_time = 0;
+	}
+}
+
 void quit(void)
 {
+	/* free animation frames */
+	for (int i = 0; i < STATE_LAST; i++) {
+		if (animations[i].frames) {
+			for (int j = 0; j < animations[i].n_frames; j++) {
+				XFreePixmap(dpy, animations[i].frames[j].pix);
+				XFreePixmap(dpy, animations[i].frames[j].mask);
+			}
+			free(animations[i].frames);
+		}
+	}
 	XCloseDisplay(dpy);
 	exit(EXIT_SUCCESS);
 }
@@ -157,18 +207,50 @@ void run(void)
 				KeySym sym = XLookupKeysym(&ev.xkey, 0);
 				if (sym == bindings[0].sym) {
 					pet.chasing = !pet.chasing;
+					set_pet_state(pet.chasing ? E : IDLE);
 				}
 				else if (sym == bindings[1].sym) {
 					quit();
 				}
 			}
-
 		}
 
 		if (pet.chasing) {
 			goto_mouse();
 		}
+
+		update_animation();
 		xsleep(PET_REFRESH);
+	}
+}
+
+void update_animation(void)
+{
+	if (!pet.current_animation || pet.current_animation->n_frames <= 0) {
+		return;
+	}
+
+	pet.frame_time += PET_REFRESH;
+
+	struct frame* frame = &pet.current_animation->frames[pet.current_frame];
+
+	if (pet.frame_time >= frame->duration) {
+		pet.frame_time = 0;
+		pet.current_frame++;
+
+		if (pet.current_frame >= pet.current_animation->n_frames) {
+			if (pet.current_animation->loop) {
+				pet.current_frame = 0;
+			} else {
+				pet.current_frame = pet.current_animation->n_frames - 1;
+			}
+		}
+
+		/* update window with new frame */
+		frame = &pet.current_animation->frames[pet.current_frame];
+		XShapeCombineMask(dpy, pet.window, ShapeBounding, 0, 0, frame->mask, ShapeSet);
+		XSetWindowBackgroundPixmap(dpy, pet.window, frame->pix);
+		XClearWindow(dpy, pet.window);
 	}
 }
 
@@ -186,7 +268,7 @@ int main(int argc, char** argv)
 	(void) argv;
 	if (argc > 1) {
 		printf(
-			"xpets "VERSION"\r\n"
+			"xpets " VERSION "\r\n"
 			"uint 2025"
 		);
 	}
